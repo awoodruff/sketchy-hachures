@@ -1,0 +1,251 @@
+<html>
+<body>
+<script>
+
+var reliefCanvas = document.createElement('canvas');
+reliefCanvas.id='relief';
+document.body.appendChild(reliefCanvas);
+var reliefContext;
+var reliefImageData;
+var reliefData;
+
+var demCanvas = document.createElement('canvas');
+var demContext;
+var demImageData;
+var demData;
+
+var width;
+var height;
+
+// load elevation image data
+var img = new Image();
+img.onload = function(){
+  width = img.width;
+  height = img.height;
+
+  reliefCanvas.width = width;
+  reliefCanvas.height = height;
+
+  demCanvas.width = width;
+  demCanvas.height = height;
+
+  reliefContext = reliefCanvas.getContext('2d');
+  reliefImageData = reliefContext.getImageData(0,0,width,height);
+  reliefData = reliefImageData.data;
+
+  demContext = demCanvas.getContext('2d');
+  demContext.drawImage(img,0,0,width,height);
+  demImageData = demContext.getImageData(0,0,width,height);
+  demData = demImageData.data;
+
+  drawRelief();
+}
+
+img.src = 'bigisland.png';
+// img.src = 'sf.png';
+// img.src = 'oahu.png';
+// img.src = 'molokai.png';
+// img.src = 'craterlake_black.png';
+// img.src = 'mtwashington.png';
+// img.src = 'yosemite.png';
+
+
+var strokeLength = 10;
+var cellSize = 2;
+var numberOfWidths = 10;
+
+var sunElev = Math.PI*.25;
+var sunAzimuth = 1.75*Math.PI;
+
+// colors correspond to shadowing, in order from dark to light. (these are some greens from ColorBrewer)
+// if only doing one render, you probably want higher alpha values here
+var colors = ['rgba(0,69,41,.35)','rgba(0,104,55,.35)','rgba(35,132,67,.35)','rgba(65,171,93,.35)','rgba(120,198,121,.35)'];
+var waterColor = "rgba(33,113,181,.75)";
+
+// this will be a multidemensional array to group strokes by weight and color, for more efficient canvas rendering
+var strokeGroups = [];
+
+// array for all the data points (x, y, slope, and aspect for each)
+var data = [];
+
+function drawRelief(){
+  for( var xx = strokeLength; xx < width-strokeLength; xx += cellSize ){
+    for (var yy = strokeLength; yy < height-strokeLength; yy += cellSize){
+
+      // random offset of x/y
+      var x = offset(xx);
+      var y = offset(yy);
+
+      // index in imagedata array for coordinates
+      var n = getIndexForCoordinates(x,y);
+
+      // assume value 0 (black) is water
+      if (demData[n] < 1) {
+        data.push([x,y]);
+        continue;
+      }
+
+      // going to use simple x and y slopes, but generalized to 3x3 squares rather than individual pixels
+      var topValue;
+      var leftValue;
+      var rightValue;
+      var bottomValue;
+      var centerValue;
+      
+      // image data index for surrounding areas
+      var cells = [[x-3,y],[x,y-3],[x+3,y],[x,y+3],[x,y]];  // 3x3 squares to the left, top, right, and bottom
+      for ( var c in cells ){
+        var cx = cells[c][0];
+        var cy = cells[c][1];
+        var top = getIndexForCoordinates(cx,Math.max(0,cy-1))
+        var left = getIndexForCoordinates(Math.max(0,cx-1),cy);
+        var right = getIndexForCoordinates(Math.min(width-1,cx+1),cy);
+        var bottom = getIndexForCoordinates(cx,Math.min(height,cy+1))
+        var topLeft = getIndexForCoordinates(cx-1,cy-1)
+        var topRight = getIndexForCoordinates(cx+1,cy-1);
+        var bottomLeft = getIndexForCoordinates(cx-1,cy+1);
+        var bottomRight = getIndexForCoordinates(cx+1,cy+1);
+        var center = getIndexForCoordinates(cx,cy);
+        // value = mean of the 9 cells
+        var sum = demData[top] + demData[left] + demData[right] + demData[bottom] + demData[topLeft] + demData[topRight] + demData[bottomLeft] + demData[bottomRight] + demData[center];
+        var avg = sum/9;
+
+        // just hard coding which group we're looking at based on array index
+        if (c==0) leftValue = avg;
+        if (c==1) topValue = avg;
+        if (c==2) rightValue = avg;
+        if (c==3) bottomValue = avg;
+        if (c==4) centerValue = avg;
+      }
+
+      // see http://andywoodruff.com/blog/shaded-relief-in-as3/ for more explanation of the following math
+
+      // calculate slope
+      var slx = (rightValue - leftValue)/9;
+      var sly = ( bottomValue - topValue )/9;
+      var sl0 = Math.sqrt( slx*slx + sly*sly );
+
+      if ( isNaN(sl0)) continue;
+      
+      // get aspect
+      var phi = Math.acos( slx/sl0 );
+      if ( sl0 == 0 ) {
+        phi = 0;
+      }
+
+      var azimuth = 0;
+      if ( slx > 0 ) {
+        if ( sly > 0 ) azimuth = phi + 1.5*Math.PI;
+        else if ( sly < 0 ) azimuth = 1.5*Math.PI - phi;
+        else phi = 1.5*Math.PI;
+      } else if ( slx < 0 ){
+        if ( sly < 0 ) azimuth = phi + .5*Math.PI;
+        else if ( sly > 0 ) azimuth = .5*Math.PI - phi;
+        else azimuth = .5*Math.PI;
+      } else {
+        if ( sly < 0 ) azimuth = Math.PI;
+        else if ( sly > 0 ) azimuth = 0;
+      }
+
+      // save slope and azimuth for this pixel
+      data.push([x,y,sl0,azimuth]);
+    }
+  }
+
+  // fill canvas with white background
+  reliefContext.fillStyle = "white";
+  reliefContext.fillRect(0,0,width,height);
+
+  draw(); // draw map!
+
+  /* Optional - comment out if you don't want to do it
+    draws image several more times on top of itself with varying sun azimuths */
+  var azimuths = [1.5*Math.PI,2*Math.PI,1.75*Math.PI]
+  var ct = 0;
+  var interval = setInterval(function(){
+    sunAzimuth = azimuths[ct];
+    draw();
+    ct++;
+    if (ct>=azimuths.length) clearInterval(interval);
+  },100);
+  /* end optional */
+}
+
+function draw(){
+  // clear out any existing groupings of weight/color
+  for ( var ww=0; ww<numberOfWidths+1; ww++){
+    strokeGroups[ww] = [];
+    for (var cl=0; cl<colors.length; cl++){
+      strokeGroups[ww][cl] = [];
+    }
+  }
+  data.forEach(function(pt){
+    // pt is [x, y, slope, azimuth]
+
+    if (pt[2] === undefined){ // this means water. we saved no slope for water. shove it into an extra class at the end
+      // stroke goes sw-ne, with a little random variation
+      strokeGroups[numberOfWidths][0].push([pt[0],pt[1],Math.PI*.65 + Math.random( Math.PI*.2)]);
+      return;
+    }
+
+    // luminance
+    var L = Math.cos( pt[3] - sunAzimuth )*Math.cos( Math.PI*.5 - Math.atan(pt[2]) )*Math.cos( sunElev ) +  Math.sin( Math.PI*.5 - Math.atan(pt[2]) )*Math.sin( sunElev );
+    if (L<0) L = 0;
+    
+    // based on slope
+    var widthClass = Math.min( parseInt( Math.atan(pt[2]) / (1/numberOfWidths) ), numberOfWidths-1 );
+
+    // based on luminance
+    var colorClass = Math.min( Math.floor(L*colors.length), colors.length-1 );
+
+    strokeGroups[widthClass][colorClass].push([pt[0],pt[1],pt[3]+Math.PI/2]); // rotate pt[3] 90 degrees to be perpendicular to aspect
+  })
+  
+  // draw in batches of equal weight and color
+  for (var i in strokeGroups){
+    for (var j in strokeGroups[i] ){
+
+      reliefContext.beginPath();
+      if (i != numberOfWidths){ // not water
+        reliefContext.lineWidth = Math.max(.08,.08*(i));
+        reliefContext.strokeStyle = colors[j];
+      } else {
+        // water
+        reliefContext.lineWidth = .08
+        reliefContext.strokeStyle = waterColor;
+      }
+      
+      for (var c in strokeGroups[i][j]){
+        var x = strokeGroups[i][j][c][0];
+        var y = strokeGroups[i][j][c][1];
+        var d = (strokeLength)/2;
+        var az = strokeGroups[i][j][c][2];
+        var x1 = -d * Math.cos(az) + x;
+        var y1 = -d * Math.sin(az) + y;
+        var x2 = d * Math.cos(az) + x;
+        var y2 = d * Math.sin(az) + y;
+        reliefContext.moveTo(x1,y1);
+        //reliefContext.lineTo(x2,y2);
+        // below, a little random curving. use the lineTo line above instead if you don't want this
+        reliefContext.quadraticCurveTo(x+(2-Math.random()*2),y+(2-Math.random()*2),x2,y2);
+      }
+      reliefContext.stroke();
+    }
+  }
+}
+
+function offset(n){
+  var r = Math.random();
+  if ( r > .66 ) return n + 1;
+  if ( r < .33 ) return n - 1;
+  return n;
+}
+
+// index in imageData array for x/y coordinate
+function getIndexForCoordinates(x,y) {
+  return width * y * 4 + 4 * x;
+}
+
+</script>
+</body>
+</html>
