@@ -85,70 +85,102 @@ function drawRelief(){
         continue;
       }
 
-      // going to use simple x and y slopes, but generalized to 3x3 squares rather than individual pixels
-      var topValue;
-      var leftValue;
-      var rightValue;
-      var bottomValue;
-      var centerValue;
+      /*
+      // now get average values for pixels to the top left, top, top right, etc. of center pixel
+      // ... except instead of single pixels, work with average value of 3x3 cells
       
-      // image data index for surrounding areas
-      var cells = [[x-3,y],[x,y-3],[x+3,y],[x,y+3],[x,y]];  // 3x3 squares to the left, top, right, and bottom
-      for ( var c in cells ){
-        var cx = cells[c][0];
-        var cy = cells[c][1];
-        var top = getIndexForCoordinates(cx,Math.max(0,cy-1))
-        var left = getIndexForCoordinates(Math.max(0,cx-1),cy);
-        var right = getIndexForCoordinates(Math.min(width-1,cx+1),cy);
-        var bottom = getIndexForCoordinates(cx,Math.min(height,cy+1))
-        var topLeft = getIndexForCoordinates(cx-1,cy-1)
-        var topRight = getIndexForCoordinates(cx+1,cy-1);
-        var bottomLeft = getIndexForCoordinates(cx-1,cy+1);
-        var bottomRight = getIndexForCoordinates(cx+1,cy+1);
-        var center = getIndexForCoordinates(cx,cy);
-        // value = mean of the 9 cells
-        var sum = demData[top] + demData[left] + demData[right] + demData[bottom] + demData[topLeft] + demData[topRight] + demData[bottomLeft] + demData[bottomRight] + demData[center];
-        var avg = sum/9;
+      AAA  BBB  CCC
+      AAA  BBB  CCC
+      AAA  BBB  CCC
 
-        // just hard coding which group we're looking at based on array index
-        if (c==0) leftValue = avg;
-        if (c==1) topValue = avg;
-        if (c==2) rightValue = avg;
-        if (c==3) bottomValue = avg;
-        if (c==4) centerValue = avg;
+      DDD  EEE  FFF
+      DDD  E-E  FFF
+      DDD  EEE  FFF
+
+      GGG  HHH  III
+      GGG  HHH  III
+      GGG  HHH  III
+    
+      where '-' represents our current pixel. for top left value we'll use average of the 'A' cells, and so on.
+      */
+      var cells = [[], [], []];
+      var gridSize = 3;
+      var squaredCell = gridSize * gridSize;
+      var halfCell = Math.floor(cellSize/2);
+
+      for (var row = -1; row <= 1; row ++) {
+        for (var col = -1; col <= 1; col++) {
+          if (row == 0 && col == 0) continue;
+          var cx = x + col * gridSize;
+          var cy = y + row * gridSize;
+          var avg = 0;
+          for (var cellX = cx - halfCell; cellX <= cx + halfCell; cellX++) {
+            for (var cellY = cy - halfCell; cellY <= cy +halfCell ; cellY++) {
+              var index = getIndexForCoordinates(cellX, cellY);
+              var val = demData[index];
+              if (val !== undefined) avg += val;
+            }
+          }
+          avg /= squaredCell;
+          cells[row + 1][col + 1] = avg;
+        }
       }
 
-      // see http://andywoodruff.com/blog/shaded-relief-in-as3/ for more explanation of the following math
+      /*
+      http://desktop.arcgis.com/en/arcmap/10.3/tools/spatial-analyst-toolbox/how-aspect-works.htm
+      
+      A  B  C
+
+      D  E  F
+
+      G  H  I
+
+      [dz/dx] = ((c + 2f + i) - (a + 2d + g)) / 8
+
+      [dz/dy] = ((g + 2h + i) - (a + 2b + c)) / 8
+      
+      aspect = 57.29578 * atan2 ([dz/dy], -[dz/dx])
+
+      if aspect < 0
+        cell = 90.0 - aspect  else if aspect > 90.0
+        cell = 360.0 - aspect + 90.0
+      else
+        cell = 90.0 - aspect
+
+
+      */
+
+      var a = cells[0][0],
+        b = cells[0][1],
+        c = cells[0][2],
+        d = cells[1][0],
+        e = cells[1][1],
+        f = cells[1][2],
+        g = cells[2][0],
+        h = cells[2][1],
+        i = cells[2][2];
+
+      var dx = ((c + 2*f + i) - (a + 2*d + g)) / 8;
+      var dy = ((g + 2*h + i) - (a + 2*b + c)) / 8;
+      var aspect = 57.29578 * Math.atan2 (dy, -dx);
+      if (aspect < 0)
+        aspect = 90.0 - aspect 
+      else if (aspect > 90.0)
+        aspect = 360.0 - aspect + 90.0
+      else
+        aspect = 90.0 - aspect;
+
+      aspect /= 57.29578;
 
       // calculate slope
-      var slx = (rightValue - leftValue)/9;
-      var sly = ( bottomValue - topValue )/9;
+      var slx = (f - d)/9;
+      var sly = (h - b )/9;
       var sl0 = Math.sqrt( slx*slx + sly*sly );
 
       if ( isNaN(sl0)) continue;
-      
-      // get aspect
-      var phi = Math.acos( slx/sl0 );
-      if ( sl0 == 0 ) {
-        phi = 0;
-      }
-
-      var azimuth = 0;
-      if ( slx > 0 ) {
-        if ( sly > 0 ) azimuth = phi + 1.5*Math.PI;
-        else if ( sly < 0 ) azimuth = 1.5*Math.PI - phi;
-        else phi = 1.5*Math.PI;
-      } else if ( slx < 0 ){
-        if ( sly < 0 ) azimuth = phi + .5*Math.PI;
-        else if ( sly > 0 ) azimuth = .5*Math.PI - phi;
-        else azimuth = .5*Math.PI;
-      } else {
-        if ( sly < 0 ) azimuth = Math.PI;
-        else if ( sly > 0 ) azimuth = 0;
-      }
 
       // save slope and azimuth for this pixel
-      data.push([x,y,sl0,azimuth]);
+      data.push([x,y,sl0,aspect]);
     }
   }
 
